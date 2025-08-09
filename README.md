@@ -42,11 +42,11 @@ git clone https://github.com/melihcanaltan/ip-blacklist-management.git
 cd ip-blacklist-management
 
 # 2. Web root'a symlink oluştur
-sudo ln -s /path/to/blacklist-management /var/www/html/blacklist-admin
+sudo ln -s /path/to/ip-blacklist-management /var/www/html/ip-blacklist-admin
 
 # 3. İzinleri ayarla
-sudo chown -R www-data:www-data /path/to/blacklist-management
-sudo chmod -R 755 /path/to/blacklist-management
+sudo chown -R www-data:www-data /path/to/ip-blacklist-management
+sudo chmod -R 755 /path/to/ip-blacklist-management
 ```
 
 ### 2. Bağımlılıkları Yükleyin
