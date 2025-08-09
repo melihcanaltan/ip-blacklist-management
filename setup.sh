@@ -15,7 +15,7 @@ read -p "Kullanmak istediğiniz port numarası? (Varsayılan: 80): " custom_port
 custom_port=${custom_port:-80}
 
 # Proje dizini
-PROJECT_DIR="blacklist-management"
+PROJECT_DIR="ip-blacklist-management"
 TARGET_DIR="/var/www/html/$PROJECT_DIR"
 
 echo "📁 Proje dizini oluşturuluyor: $TARGET_DIR"
