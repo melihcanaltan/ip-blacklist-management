@@ -37,8 +37,16 @@ PHP tabanlı, web arayüzlü IP blacklist yönetim sistemi. Manuel IP ekleme/sil
 ### 1. Projeyi İndirin
 
 ```bash
-git clone https://github.com/yourusername/blacklist-management.git
-cd blacklist-management
+# 1. Repository clone et
+git clone https://github.com/melihcanaltan/ip-blacklist-management.git
+cd ip-blacklist-management
+
+# 2. Web root'a symlink oluştur
+sudo ln -s /path/to/blacklist-management /var/www/html/blacklist-admin
+
+# 3. İzinleri ayarla
+sudo chown -R www-data:www-data /path/to/blacklist-management
+sudo chmod -R 755 /path/to/blacklist-management
 ```
 
 ### 2. Bağımlılıkları Yükleyin
