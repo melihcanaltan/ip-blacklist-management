@@ -196,6 +196,8 @@ blacklist-management/
 ├── delete.php              # Silme işlemleri
 ├── edit.php                # Düzenleme sayfası
 ├── download_excel.php      # Excel template indirme
+├──upload_excel.php          # Excel yükleme
+├── whitelist.php             # Whitelist ekleme
 ├── config/
 │   └── config.php         # Ana konfigürasyon
 ├── assets/
