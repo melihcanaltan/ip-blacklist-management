@@ -63,6 +63,39 @@ return [
 ];
 ```
 
+⚙️ Otomatik Kurulum (Apache + Port + Sendmail)
+Projeyle birlikte gelen setup.sh betiği ile aşağıdaki işlemler otomatik yapılabilir:
+
+Apache kurulumu
+
+İstenilen portta yayına alma
+
+Sendmail kurulumu (PHP mail desteği için)
+
+VirtualHost yapılandırması
+
+Kullanım:
+
+chmod +x setup.sh
+./setup.sh
+Kurulum sırasında size:
+
+Apache kurulumu yapılmasını ister misiniz?
+
+Hangi port kullanılacak?
+
+Sendmail kurulumu yapılacak mı?
+
+gibi sorular sorulacaktır.
+
+Erişim:
+http://localhost:PORT
+Örneğin, 8080 portu seçildiğinde:
+
+
+http://localhost:8080
+
+
 ### 5. Veri Dosyalarını Hazırlayın
 ```bash
 # Boş veri dosyaları oluşturun
@@ -182,14 +215,11 @@ Bu proje MIT lisansı altında lisanslanmıştır. Detaylar için `LICENSE` dosy
 
 ## 🐛 Sorun Bildirimi
 
-Sorunları [GitHub Issues](https://github.com/yourusername/blacklist-management/issues) üzerinden bildirebilirsiniz.
+Sorunları [GitHub Issues](https://github.com/melihcanaltan/blacklist-management/issues) üzerinden bildirebilirsiniz.
 
 ## 👥 İletişim
 
-- **Proje Sahibi**: Your Name
-- **E-posta**: your.email@company.com
-- **GitHub**: [@yourusername](https://github.com/yourusername)
+- **Proje Sahibi**: Melih Can Altan
+- **E-posta**: admin@cyberwebeyeos.com
+- **GitHub**: [@yourusername](https://github.com/melihcanaltan)
 
----
-
-⚠️ **Önemli Not**: Bu sistem production ortamında kullanılmadan önce güvenlik testlerinden geçirilmelidir. Gerçek IP adreslerini GitHub'a yüklememeyiniz.
