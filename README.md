@@ -63,36 +63,33 @@ return [
 ];
 ```
 
-⚙️ Otomatik Kurulum (Apache + Port + Sendmail)
-Projeyle birlikte gelen setup.sh betiği ile aşağıdaki işlemler otomatik yapılabilir:
+## ⚙️ Otomatik Kurulum (Apache + Port + Sendmail)
 
-Apache kurulumu
+Projeyle birlikte gelen `setup.sh` betiği ile aşağıdaki işlemler otomatik yapılabilir:
 
-İstenilen portta yayına alma
+- Apache kurulumu  
+- İstenilen portta yayına alma  
+- Sendmail kurulumu (PHP mail() fonksiyonu için)  
+- VirtualHost yapılandırması ve site aktivasyonu
 
-Sendmail kurulumu (PHP mail desteği için)
+### Kullanım:
 
-VirtualHost yapılandırması
-
-Kullanım:
-
+```bash
 chmod +x setup.sh
 ./setup.sh
+
 Kurulum sırasında size:
 
 Apache kurulumu yapılmasını ister misiniz?
 
 Hangi port kullanılacak?
 
-Sendmail kurulumu yapılacak mı?
+Sendmail kurulumu yapılsın mı?
 
 gibi sorular sorulacaktır.
 
-Erişim:
+### Erişim:
 http://localhost:PORT
-Örneğin, 8080 portu seçildiğinde:
-
-
 http://localhost:8080
 
 
