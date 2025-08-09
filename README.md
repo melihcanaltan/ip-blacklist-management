@@ -28,8 +28,8 @@ PHP tabanlı, web arayüzlü IP blacklist yönetim sistemi. Manuel IP ekleme/sil
 
 ### 1. Projeyi İndirin
 ```bash
-git clone https://github.com/yourusername/blacklist-management.git
-cd blacklist-management
+git clone https://github.com/melihcanaltan/ip-blacklist-management.git
+cd ip-blacklist-management
 ```
 
 ### 2. Bağımlılıkları Yükleyin
@@ -83,6 +83,8 @@ blacklist-management/
 ├── delete.php               # Silme işlemleri
 ├── edit.php                 # Düzenleme sayfası
 ├── download_excel.php       # Excel template indirme
+├── upload_excel.php         # Excel yükleme
+├── whitelist.php            # White sayfası
 ├── config/
 │   └── config.php          # Ana konfigürasyon
 ├── assets/
