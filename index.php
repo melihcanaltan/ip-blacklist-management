@@ -601,7 +601,7 @@ $per_page_options = $config['pagination']['options'];
 <head>
     <meta charset="UTF-8">
     <title><?php echo $config['app']['name']; ?></title>
-    <link rel="stylesheet" href="assets/css/styles.css">
+    <link rel="stylesheet" href="/www/html/ip-blacklist-management/assets/css/styles.css">
 </head>
 <body>
 <header style="background-color: rgba(0, 85, 136, 0.7); color: white; padding: 20px; position: relative;">
