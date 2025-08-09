@@ -18,17 +18,19 @@ if [[ "$install_php" == "E" || "$install_php" == "e" ]]; then
     sudo apt install php php-cli php-zip php-xml php-gd php-curl php-mbstring unzip curl -y
     echo "📦 Composer kuruluyor..."
     
+    # Composer yükleyici doğrulama
     EXPECTED_SIGNATURE=$(curl -s https://composer.github.io/installer.sig)
     php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
     ACTUAL_SIGNATURE=$(php -r "echo hash_file('sha384', 'composer-setup.php');")
 
-    if [ "$EXPECTED_SIGNATURE" != "$ACTUAL_SIGNATURE" ]
-    then
+    # Yükleyici doğrulama
+    if [ "$EXPECTED_SIGNATURE" != "$ACTUAL_SIGNATURE" ]; then
         >&2 echo "❌ Hata: Composer yükleyici doğrulama başarısız."
         rm composer-setup.php
         exit 1
     fi
 
+    # Composer kurulum
     php composer-setup.php --quiet
     sudo mv composer.phar /usr/local/bin/composer
     rm composer-setup.php
@@ -90,6 +92,10 @@ if [[ "$install_sendmail" == "E" || "$install_sendmail" == "e" ]]; then
     echo "✅ Sendmail kurulumu tamamlandı."
     echo "ℹ️ Not: Mail gönderimi çalışmazsa sunucu SMTP portlarının açık olduğundan emin olun."
 fi
+
+# Bağımlılıkların kurulumu
+echo "📦 Composer bağımlılıkları kuruluyor..."
+composer install --no-dev --optimize-autoloader
 
 echo "✅ Kurulum tamamlandı."
 echo "🌐 Uygulamayı şu adresten açabilirsiniz: http://localhost:$custom_port"
