@@ -4,12 +4,63 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 header('Content-Type: text/html; charset=utf-8');
 
-// Eger message tanimli degilse, baslangiçta bos bir deger atayin
+// Configuration - Edit these settings for your environment
+$config = [
+    // System Configuration
+    'app_name' => 'IP Whitelist Management System',
+    'company_name' => 'Generic Security Tools',
+    'logo_path' => '/images/logo.png', // Change to your logo path
+    'copyright_year' => date('Y'),
+    
+    // File Paths
+    'whitelist_path' => __DIR__ . '/data/whitelist.txt', // Adjust path as needed
+    'blacklist_manager_url' => 'index.php', // URL to blacklist manager
+    
+    // Display Settings
+    'default_per_page' => 10,
+    'max_per_page' => 100,
+    'per_page_options' => [10, 25, 50, 100],
+    
+    // Theme Colors (CSS Custom Properties)
+    'theme' => [
+        'primary_color' => '#005588',
+        'primary_light' => '#2579b0',
+        'secondary_color' => '#333333',
+        'success_color' => '#28a745',
+        'danger_color' => '#dc3545',
+        'warning_color' => '#ffc107',
+        'info_color' => '#17a2b8',
+        'light_color' => '#f8f9fa',
+        'dark_color' => '#343a40'
+    ]
+];
+
+// Language Configuration
+$lang = [
+    'app_title' => 'Whitelist Management Interface',
+    'whitelist_title' => 'Whitelist (Allowed IPs)',
+    'search_placeholder' => 'Search IP address...',
+    'search_button' => 'Search',
+    'back_to_blacklist' => 'Back to Blacklist Manager',
+    'per_page_label' => 'Per Page:',
+    'ip_address_column' => 'IP Address/Subnet',
+    'list_type_column' => 'List Type',
+    'list_type_whitelist' => 'Whitelist',
+    'no_records' => 'No records found',
+    'total_records' => 'Total: %d records',
+    'previous_page' => 'Â« Previous',
+    'next_page' => 'Next Â»',
+    'all_rights_reserved' => 'All rights reserved.'
+];
+
+// Initialize session message if not set
 if (!isset($_SESSION['message'])) {
     $_SESSION['message'] = "";
 }
 
-// Bildirimleri göster
+/**
+ * Display session messages and clear them
+ */
 function display_message() {
     if (isset($_SESSION['message']) && !empty($_SESSION['message'])) {
         echo "<div class='alert alert-info'>
@@ -20,15 +71,18 @@ function display_message() {
     }
 }
 
-function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
-    $whitelist_path = "/var/www/blacklist/payten/whitelist.txt";
+/**
+ * Display whitelist with pagination and search functionality
+ */
+function display_whitelist($config, $lang, $search_ip = '', $per_page = 10, $page = 1) {
+    $whitelist_path = $config['whitelist_path'];
     
-    // Whitelist dosyasini oku
+    // Read whitelist file
     $whitelist_items = [];
     if (file_exists($whitelist_path)) {
         $lines = file($whitelist_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         foreach ($lines as $line) {
-            // Yorum satirlarini atla ve IP formatinda olan satirlari al
+            // Skip comment lines and get lines that are in IP format
             if (substr(trim($line), 0, 1) !== '#' && (filter_var(explode('/', trim($line))[0], FILTER_VALIDATE_IP) || 
                 (strpos(trim($line), '/') !== false && validate_cidr(trim($line))))) {
                 $whitelist_items[] = trim($line);
@@ -36,11 +90,11 @@ function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
         }
     }
     
-    // Arama yapiliyorsa filtrele
+    // Filter if search is performed
     if ($search_ip) {
         $filtered_items = [];
         foreach ($whitelist_items as $item) {
-            // Direkt eslesme veya subnet kontrolü
+            // Direct match or subnet check
             if (strpos($item, $search_ip) !== false || ip_in_subnet($search_ip, $item)) {
                 $filtered_items[] = $item;
             }
@@ -56,14 +110,13 @@ function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
     $start_index = ($page - 1) * $per_page;
     $displayed_items = array_slice($filtered_items, $start_index, $per_page);
     
-    // Sayfa basina gösterim seçenegi
+    // Per page selection
     echo "<div class='action-bar'>";
     echo "<div class='per-page-section'>";
     echo "<form method='get' action='" . htmlspecialchars($_SERVER["PHP_SELF"]) . "'>";
-    echo "<label for='per_page'>Sayfa Ba&#351;&#305;na:</label>";
+    echo "<label for='per_page'>" . $lang['per_page_label'] . "</label>";
     echo "<select name='per_page' id='per_page' class='form-control' onchange='this.form.submit()'>";
-    $per_page_options = [10, 25, 50, 100];
-    foreach ($per_page_options as $option) {
+    foreach ($config['per_page_options'] as $option) {
         echo "<option value='$option'" . ($option == $per_page ? ' selected' : '') . ">$option</option>";
     }
     echo "</select>";
@@ -77,20 +130,20 @@ function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
     echo "<table class='data-table'>";
     echo "<thead>";
     echo "<tr>
-            <th>IP Adresi/Subnet</th>
-            <th>Liste</th>
+            <th>" . $lang['ip_address_column'] . "</th>
+            <th>" . $lang['list_type_column'] . "</th>
           </tr>";
     echo "</thead>";
     echo "<tbody>";
     
     if (count($displayed_items) == 0) {
-        echo "<tr><td colspan='2' class='no-records'>Kay&#305;t bulunamad&#305;</td></tr>";
+        echo "<tr><td colspan='2' class='no-records'>" . $lang['no_records'] . "</td></tr>";
     } else {
         foreach ($displayed_items as $item) {
             if (!empty($item)) {
                 echo "<tr>";
                 echo "<td>" . htmlspecialchars($item) . "</td>";
-                echo "<td>Whitelist</td>";
+                echo "<td>" . $lang['list_type_whitelist'] . "</td>";
                 echo "</tr>";
             }
         }
@@ -100,16 +153,16 @@ function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
     echo "</table>";
     echo "</div>";
     
-    echo "<div class='record-info'>Toplam: $total_items kay&#305;t</div>";
+    echo "<div class='record-info'>" . sprintf($lang['total_records'], $total_items) . "</div>";
     
-    // Sayfalama
+    // Pagination
     if ($total_pages > 1) {
         echo "<div class='pagination'>";
         if ($page > 1) {
-            echo "<a href='?page=" . ($page - 1) . "&per_page=$per_page&search=$search_ip' class='page-link'>&laquo; &Ouml;nceki</a>";
+            echo "<a href='?page=" . ($page - 1) . "&per_page=$per_page&search=$search_ip' class='page-link'>" . $lang['previous_page'] . "</a>";
         }
         
-        // Sayfa numaralarini göster
+        // Show page numbers
         $max_pages_to_show = 5;
         $start_page = max(1, min($page - floor($max_pages_to_show / 2), $total_pages - $max_pages_to_show + 1));
         $end_page = min($start_page + $max_pages_to_show - 1, $total_pages);
@@ -137,19 +190,21 @@ function display_whitelist($search_ip = '', $per_page = 10, $page = 1) {
         }
         
         if ($page < $total_pages) {
-            echo "<a href='?page=" . ($page + 1) . "&per_page=$per_page&search=$search_ip' class='page-link'>Sonraki &raquo;</a>";
+            echo "<a href='?page=" . ($page + 1) . "&per_page=$per_page&search=$search_ip' class='page-link'>" . $lang['next_page'] . "</a>";
         }
         echo "</div>";
     }
 }
 
-// IP'yi CIDR formatinda dogrulama
+/**
+ * Validate CIDR format IP addresses
+ */
 function validate_cidr($cidr) {
     if (preg_match('/^(\d{1,3}\.){3}\d{1,3}\/\d+$/', $cidr)) {
         list($ip, $prefix) = explode('/', $cidr);
         if (filter_var($ip, FILTER_VALIDATE_IP)) {
             $prefix = (int)$prefix;
-            // IPv4 için prefix 0-32 arasinda olmali
+            // For IPv4, prefix should be between 0-32
             if ($prefix >= 0 && $prefix <= 32) {
                 return true;
             }
@@ -158,59 +213,65 @@ function validate_cidr($cidr) {
     return false;
 }
 
-// Bir IP'nin subnet içinde olup olmadigini kontrol eder
+/**
+ * Check if an IP is within a subnet
+ */
 function ip_in_subnet($ip, $subnet) {
-    // Eger subnet degilse direkt karsilastir
+    // If not a subnet, compare directly
     if (strpos($subnet, '/') === false) {
         return $ip === $subnet;
     }
     
-    // CIDR notasyonu için kontrol yapalim
+    // Check for CIDR notation
     list($subnet_ip, $subnet_bits) = explode('/', $subnet);
     
-    // IP adreslerini 32-bit tamsayilara dönüstür
+    // Convert IP addresses to 32-bit integers
     $ip_long = ip2long($ip);
     $subnet_long = ip2long($subnet_ip);
     
     if ($ip_long === false || $subnet_long === false) {
-        return false; // Geçersiz IP adresi
+        return false; // Invalid IP address
     }
     
-    // Subnet maskesini hesapla
+    // Calculate subnet mask
     $mask = -1 << (32 - (int)$subnet_bits);
     
-    // IP'nin subnet içinde olup olmadigini kontrol et
+    // Check if IP is within subnet
     return ($ip_long & $mask) === ($subnet_long & $mask);
 }
 
-// Kullanicidan arama terimini ve sayfa ayarlarini al
+/**
+ * Generate CSS custom properties from theme configuration
+ */
+function generate_css_variables($theme) {
+    $css = ":root {\n";
+    foreach ($theme as $key => $value) {
+        $css_var_name = '--' . str_replace('_', '-', $key);
+        $css .= "    $css_var_name: $value;\n";
+    }
+    $css .= "}";
+    return $css;
+}
+
+// Get user input for search terms and page settings
 $search_ip = isset($_GET['search']) ? trim($_GET['search']) : '';
-$per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 10;
+$per_page = isset($_GET['per_page']) ? min((int)$_GET['per_page'], $config['max_per_page']) : $config['default_per_page'];
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 ?>
 
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payten Whitelist Y&ouml;netim Aray&uuml;z&uuml;</title>
+    <title><?php echo htmlspecialchars($config['app_name']); ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        :root {
-            --primary-color: #005588;
-            --primary-light: #2579b0;
-            --secondary-color: #333333;
-            --success-color: #28a745;
-            --danger-color: #dc3545;
-            --warning-color: #ffc107;
-            --info-color: #17a2b8;
-            --light-color: #f8f9fa;
-            --dark-color: #343a40;
-            --border-color: #dee2e6;
-            --shadow-color: rgba(0, 0, 0, 0.1);
-        }
+        <?php echo generate_css_variables($config['theme']); ?>
+        
+        --shadow-color: rgba(0, 0, 0, 0.1);
+        --border-color: #dee2e6;
 
         * {
             box-sizing: border-box;
@@ -255,6 +316,8 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 
         .logo {
             height: 40px;
+            max-width: 150px;
+            object-fit: contain;
         }
 
         /* Main Layout */
@@ -275,7 +338,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 
         .card-header {
             padding: 15px 20px;
-            background-color: #f8f9fa;
+            background-color: var(--light-color);
             border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
@@ -339,6 +402,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
         .btn-primary:hover {
             background-color: var(--primary-light);
             border-color: var(--primary-light);
+            color: #fff;
         }
 
         /* Table Styles */
@@ -360,7 +424,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
         }
 
         .data-table thead th {
-            background-color: #f8f9fa;
+            background-color: var(--light-color);
             font-weight: 600;
             color: var(--secondary-color);
             border-bottom: 2px solid var(--border-color);
@@ -427,7 +491,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
         }
 
         .page-link:hover {
-            background-color: #f8f9fa;
+            background-color: var(--light-color);
         }
 
         .page-link.current {
@@ -522,13 +586,15 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 <body>
     <header class="header">
         <div class="header-content">
-            <h1 class="header-title">Payten Whitelist Y&ouml;netim Aray&uuml;z&uuml;</h1>
+            <h1 class="header-title"><?php echo htmlspecialchars($config['app_name']); ?></h1>
             <div class="header-actions">
-                <a href="paytenblacklist.php" class="btn btn-primary">
-                    <i class="fas fa-arrow-left"></i> Blacklist Y&ouml;netim Aray&uuml;z&uuml;ne D&ouml;n
+                <a href="<?php echo htmlspecialchars($config['blacklist_manager_url']); ?>" class="btn btn-primary">
+                    <i class="fas fa-arrow-left"></i> <?php echo htmlspecialchars($lang['back_to_blacklist']); ?>
                 </a>
             </div>
-            <img src="/images/payten.png" alt="Payten Logo" class="logo">
+            <?php if (file_exists($_SERVER['DOCUMENT_ROOT'] . $config['logo_path'])): ?>
+                <img src="<?php echo htmlspecialchars($config['logo_path']); ?>" alt="<?php echo htmlspecialchars($config['company_name']); ?> Logo" class="logo">
+            <?php endif; ?>
         </div>
     </header>
 
@@ -537,24 +603,24 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
     <div class="container">
         <div class="card">
             <div class="card-header">
-                <h2 class="card-title">Beyaz Liste (Whitelist)</h2>
+                <h2 class="card-title"><?php echo htmlspecialchars($lang['whitelist_title']); ?></h2>
                 <div class="search-section">
                     <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" class="d-flex">
-                        <input type="text" name="search" class="form-control" placeholder="IP Adresi ara..." value="<?php echo htmlspecialchars($search_ip); ?>">
+                        <input type="text" name="search" class="form-control" placeholder="<?php echo htmlspecialchars($lang['search_placeholder']); ?>" value="<?php echo htmlspecialchars($search_ip); ?>">
                         <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-search"></i> Ara
+                            <i class="fas fa-search"></i> <?php echo htmlspecialchars($lang['search_button']); ?>
                         </button>
                     </form>
                 </div>
             </div>
             <div class="card-body">
-                <?php display_whitelist($search_ip, $per_page, $page); ?>
+                <?php display_whitelist($config, $lang, $search_ip, $per_page, $page); ?>
             </div>
         </div>
     </div>
 
     <footer class="footer">
-        <p>&copy; 2024 Payten. T&uuml;m haklar&#305; sakl&#305;d&#305;r.</p>
+        <p>&copy; <?php echo $config['copyright_year'] . ' ' . htmlspecialchars($config['company_name']); ?>. <?php echo htmlspecialchars($lang['all_rights_reserved']); ?></p>
     </footer>
 </body>
 </html>
