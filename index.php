@@ -2,9 +2,17 @@
 session_start();
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
+header('Content-Type: text/html; charset=utf-8');
 
 // Config dosyasını yükle
 $config = require_once 'config/config.php';
+
+// Integration Manager'ı yükle
+require_once 'includes/IntegrationManager.php';
+$integrationManager = new IntegrationManager($config);
+
+// Manuel blacklist'i output'a senkronize et
+sync_manual_blacklist_to_output();
 
 // Eğer message tanımlı değilse, başlangıçta boş bir değer atayın
 if (!isset($_SESSION['message'])) {
@@ -15,8 +23,6 @@ require_once 'vendor/autoload.php';
 
 // Config'den dosya yollarını al
 $file_path = $config['file_paths']['blacklist'];
-$ci_badguys_blacklist = $config['file_paths']['ci_badguys'];
-$firehol_blacklist = $config['file_paths']['firehol'];
 
 // Bildirimleri göster
 function display_message() {
@@ -197,50 +203,29 @@ function is_company_ip($ip) {
     return false;
 }
 
-// ********************
 // Güncellenmiş Blacklist Görüntüleme Fonksiyonu
-// ********************
 function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_filter = 'all') {
-    global $file_path, $ci_badguys_blacklist, $firehol_blacklist;
+    global $file_path, $integrationManager;
     
     // Manuel güncellenebilen liste
     $manual_items = file_exists($file_path) ? file($file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
     
-    // Global listeler (sadece görüntülenebilir)
-    $ci_badguys_items = [];
-    if (file_exists($ci_badguys_blacklist)) {
-        $lines = file($ci_badguys_blacklist, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            // Yorum satırlarını atla ve IP formatında olan satırları al
-            if (substr(trim($line), 0, 1) !== '#' && filter_var(trim($line), FILTER_VALIDATE_IP) || 
-                strpos(trim($line), '/') !== false && validate_cidr(trim($line))) {
-                $ci_badguys_items[] = trim($line);
-            }
-        }
-    }
-    
-    $firehol_items = [];
-    if (file_exists($firehol_blacklist)) {
-        $lines = file($firehol_blacklist, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            // Yorum satırlarını atla ve IP formatında olan satırları al
-            if (substr(trim($line), 0, 1) !== '#' && (filter_var(trim($line), FILTER_VALIDATE_IP) || 
-                strpos(trim($line), '/') !== false && validate_cidr(trim($line)))) {
-                $firehol_items[] = trim($line);
-            }
-        }
-    }
-
     // Üç listeyi birleştirip, kaynağı belirterek işaretleyelim
     $combined_items = [];
     foreach ($manual_items as $item) {
         $combined_items[] = ['data' => $item, 'editable' => true, 'source' => 'Manuel'];
     }
-    foreach ($ci_badguys_items as $item) {
-        $combined_items[] = ['data' => $item, 'editable' => false, 'source' => 'ci-badguys'];
-    }
-    foreach ($firehol_items as $item) {
-        $combined_items[] = ['data' => $item, 'editable' => false, 'source' => 'Firehol_level1'];
+    
+    // Aktif entegrasyonları ekle
+    foreach ($integrationManager->getEnabledIntegrations() as $key => $integration) {
+        $integration_items = $integrationManager->getIpList($key);
+        foreach ($integration_items as $item) {
+            $combined_items[] = [
+                'data' => $item, 
+                'editable' => false, 
+                'source' => $integrationManager->getName($key)
+            ];
+        }
     }
     
     // Liste filtreleme
@@ -257,9 +242,41 @@ function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_fil
     // Arama yapılıyorsa filtrele
     if ($search_ip) {
         $filtered_items = [];
+        $search_ip_only = $search_ip;
+        
+        // Eğer arama terimi CIDR formatındaysa, sadece IP kısmını çıkar
+        if (strpos($search_ip, '/') !== false) {
+            $search_ip_only = explode('/', $search_ip)[0];
+        }
+        
         foreach ($combined_items as $item) {
+            // Verinin herhangi bir kısmında doğrudan metin eşleşmesi (mevcut işlevsellik)
             if (strpos($item['data'], $search_ip) !== false) {
                 $filtered_items[] = $item;
+                continue; // Eşleşme varsa diğer kontrolleri atla
+            }
+            
+            // Arama teriminin subnet kontrolü için geçerli bir IP olup olmadığını kontrol et
+            if (filter_var($search_ip_only, FILTER_VALIDATE_IP)) {
+                // Öğe verisinden IP/subnet çıkar
+                $item_ip = '';
+                if ($item['source'] === 'Manuel') {
+                    // Manuel liste girişleri için IP, borudan önceki ilk kısımdır
+                    $entry_parts = explode("|", $item['data']);
+                    if (!empty($entry_parts[0])) {
+                        $item_ip = $entry_parts[0];
+                    }
+                } else {
+                    // Global listeler için, veri doğrudan IP/subnet'tir
+                    $item_ip = $item['data'];
+                }
+                
+                // Eğer öğe bir subnet içeriyorsa ('/'), IP'nin o subnet içinde olup olmadığını kontrol et
+                if (!empty($item_ip) && strpos($item_ip, '/') !== false) {
+                    if (is_ip_in_subnet_range($search_ip_only, $item_ip)) {
+                        $filtered_items[] = $item;
+                    }
+                }
             }
         }
     } else {
@@ -273,17 +290,32 @@ function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_fil
     $start_index = ($page - 1) * $per_page;
     $displayed_items = array_slice($filtered_items, $start_index, $per_page);
     
-    echo "<h2>Kara Liste</h2>";
-    
     // Liste filtre seçenekleri
-    echo "<div class='list-filter'>";
+    echo "<div class='search-bar'>";
+    echo "<form method='get' action='" . htmlspecialchars($_SERVER["PHP_SELF"]) . "'>";
+    echo "<table class='search-table' cellpadding='0' cellspacing='0'><tr>";
+    echo "<td style='width:100%'><input type='text' name='search' class='form-control' placeholder='IP Adresi veya FQDN ara...' value='" . htmlspecialchars($search_ip) . "'></td>";
+    echo "<td><button type='submit' class='btn btn-primary'><i class='fas fa-search'></i> Ara</button></td>";
+    echo "</tr></table>";
+    echo "<input type='hidden' name='per_page' value='" . $per_page . "'>";
+    echo "<input type='hidden' name='list_filter' value='" . $list_filter . "'>";
+    echo "</form>";
+    echo "</div>";
+    echo "<div class='action-bar'>";
+    echo "<div class='filter-section'>";
     echo "<form method='get' action='" . htmlspecialchars($_SERVER["PHP_SELF"]) . "'>";
     echo "<label for='list_filter'>Liste Filtresi:</label>";
     echo "<select name='list_filter' id='list_filter' onchange='this.form.submit()'>";
     echo "<option value='all'" . ($list_filter === 'all' ? ' selected' : '') . ">Tüm Listeler</option>";
     echo "<option value='Manuel'" . ($list_filter === 'Manuel' ? ' selected' : '') . ">Manuel Liste</option>";
-    echo "<option value='ci-badguys'" . ($list_filter === 'ci-badguys' ? ' selected' : '') . ">ci-badguys</option>";
-    echo "<option value='Firehol_level1'" . ($list_filter === 'Firehol_level1' ? ' selected' : '') . ">Firehol_level1</option>";
+    
+    // Aktif entegrasyonları dinamik olarak ekle
+    foreach ($integrationManager->getEnabledIntegrations() as $key => $integration) {
+        $integration_name = $integrationManager->getName($key);
+        $selected = ($list_filter === $integration_name) ? ' selected' : '';
+        echo "<option value='$integration_name'$selected>$integration_name</option>";
+    }
+    
     echo "</select>";
     echo "<input type='hidden' name='search' value='" . htmlspecialchars($search_ip) . "'>";
     echo "<input type='hidden' name='per_page' value='" . $per_page . "'>";
@@ -291,10 +323,28 @@ function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_fil
     echo "</form>";
     echo "</div>";
     
+    echo "<div class='per-page-section'>";
+    echo "<form method='get' action='" . htmlspecialchars($_SERVER["PHP_SELF"]) . "'>";
+    echo "<label for='per_page'>Sayfa Başına:</label>";
+    echo "<select name='per_page' id='per_page' onchange='this.form.submit()'>";
+    $per_page_options = [10, 25, 50, 100];
+    foreach ($per_page_options as $option) {
+        echo "<option value='$option'" . ($option == $per_page ? ' selected' : '') . ">$option</option>";
+    }
+    echo "</select>";
+    echo "<input type='hidden' name='search' value='" . htmlspecialchars($search_ip) . "'>";
+    echo "<input type='hidden' name='page' value='$page'>";
+    echo "<input type='hidden' name='list_filter' value='$list_filter'>";
+    echo "</form>";
+    echo "</div>";
+    echo "</div>"; // action-bar end
+    
+    echo "<div class='table-responsive'>";
     echo "<form method='post' action='delete.php'>";
-    echo "<table class='blacklist-table'>";
+    echo "<table class='data-table'>";
+    echo "<thead>";
     echo "<tr>
-            <th>Seç</th>
+            <th><input type='checkbox' id='select-all' onclick='toggleAllCheckboxes()'></th>
             <th>IP Adresi</th>
             <th>Yorum</th>
             <th>FQDN</th>
@@ -303,58 +353,69 @@ function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_fil
             <th>Liste</th>
             <th>İşlem</th>
           </tr>";
+    echo "</thead>";
+    echo "<tbody>";
     
-    foreach ($displayed_items as $item) {
-        if (!empty($item['data'])) {
-            // Global liste öğeleri için farklı bir işleme
-            if ($item['source'] === 'ci-badguys' || $item['source'] === 'Firehol_level1') {
-                $ip = $item['data']; // Data direkt IP'dir artık
-                $comment = '';
-                $fqdn = '';
-                $jira = '';
-                $date = '';
-            } else {
-                // Manuel liste için normal ayrıştırma
-                $entry_parts = explode("|", $item['data']);
-                if (count($entry_parts) < 5) {
-                    // Bu satırı atla veya boş değerlerle doldur
-                    $entry_parts = array_pad($entry_parts, 5, '');
+    if (count($displayed_items) == 0) {
+        echo "<tr><td colspan='8' class='no-records'>Kayıt bulunamadı</td></tr>";
+    } else {
+        foreach ($displayed_items as $item) {
+            if (!empty($item['data'])) {
+                // Global liste öğeleri için farklı bir işleme
+                if ($item['source'] !== 'Manuel') {
+                    $ip = $item['data']; // Data direkt IP'dir artık
+                    $comment = '';
+                    $fqdn = '';
+                    $jira = '';
+                    $date = '';
+                } else {
+                    // Manuel liste için normal ayrıştırma
+                    $entry_parts = explode("|", $item['data']);
+                    if (count($entry_parts) < 5) {
+                        // Bu satırı atla veya boş değerlerle doldur
+                        $entry_parts = array_pad($entry_parts, 5, '');
+                    }
+                    list($ip, $comment, $date, $fqdn, $jira) = $entry_parts;
                 }
-                list($ip, $comment, $date, $fqdn, $jira) = $entry_parts;
+                
+                echo "<tr>";
+                if ($item['editable']) {
+                    echo "<td><input type='checkbox' name='selected_ips[]' value='$ip' class='record-checkbox'></td>";
+                } else {
+                    echo "<td class='center'>-</td>";
+                }
+                echo "<td>" . htmlspecialchars($ip) . "</td>
+                      <td>" . htmlspecialchars($comment) . "</td>
+                      <td>" . htmlspecialchars($fqdn) . "</td>
+                      <td>" . htmlspecialchars($jira) . "</td>
+                      <td>" . htmlspecialchars($date) . "</td>
+                      <td>" . htmlspecialchars($item['source']) . "</td>";
+                if ($item['editable']) {
+                    echo "<td><a href='edit.php?ip=$ip' class='btn btn-edit'>Düzenle</a></td>";
+                } else {
+                    echo "<td class='center'>Okunabilir</td>";
+                }
+                echo "</tr>";
             }
-            
-            echo "<tr>";
-            if ($item['editable']) {
-                echo "<td><input type='checkbox' name='selected_ips[]' value='$ip'></td>";
-            } else {
-                echo "<td>-</td>";
-            }
-            echo "<td>$ip</td>
-                  <td>$comment</td>
-                  <td>$fqdn</td>
-                  <td>$jira</td>
-                  <td>$date</td>
-                  <td>{$item['source']}</td>";
-            if ($item['editable']) {
-                echo "<td><a href='edit.php?ip=$ip'>Düzenle</a></td>";
-            } else {
-                echo "<td>Okunabilir</td>";
-            }
-            echo "</tr>";
         }
     }
     
+    echo "</tbody>";
     echo "</table>";
-    echo "<input type='submit' name='delete' value='Sil' class='delete-button'>";
-    echo "</form>";
     
-    echo "<div>Toplam: $total_items öğe bulunmaktadır.</div>";
+    echo "<div class='table-actions'>";
+    echo "<input type='submit' name='delete' value='Seçilenleri Sil' class='btn btn-delete'>";
+    echo "</div>";
+    echo "</form>";
+    echo "</div>"; // table-responsive end
+    
+    echo "<div class='record-info'>Toplam: <b>$total_items</b> kayıt</div>";
     
     // Sayfalama
     if ($total_pages > 1) {
         echo "<div class='pagination'>";
         if ($page > 1) {
-            echo "<a href='?page=" . ($page - 1) . "&per_page=$per_page&search=$search_ip&list_filter=$list_filter'>Önceki</a>";
+            echo "<a href='?page=" . ($page - 1) . "&per_page=$per_page&search=$search_ip&list_filter=$list_filter' class='page-link'>&laquo; Önceki</a>";
         }
         
         // Sayfa numaralarını göster
@@ -363,29 +424,29 @@ function display_blacklist($search_ip = '', $per_page = 10, $page = 1, $list_fil
         $end_page = min($start_page + $max_pages_to_show - 1, $total_pages);
         
         if ($start_page > 1) {
-            echo "<a href='?page=1&per_page=$per_page&search=$search_ip&list_filter=$list_filter'>1</a>";
+            echo "<a href='?page=1&per_page=$per_page&search=$search_ip&list_filter=$list_filter' class='page-link'>1</a>";
             if ($start_page > 2) {
-                echo "<span>...</span>";
+                echo "<span class='page-ellipsis'>...</span>";
             }
         }
         
         for ($i = $start_page; $i <= $end_page; $i++) {
             if ($i == $page) {
-                echo "<strong>$i</strong>";
+                echo "<span class='page-link current'>$i</span>";
             } else {
-                echo "<a href='?page=$i&per_page=$per_page&search=$search_ip&list_filter=$list_filter'>$i</a>";
+                echo "<a href='?page=$i&per_page=$per_page&search=$search_ip&list_filter=$list_filter' class='page-link'>$i</a>";
             }
         }
         
         if ($end_page < $total_pages) {
             if ($end_page < $total_pages - 1) {
-                echo "<span>...</span>";
+                echo "<span class='page-ellipsis'>...</span>";
             }
-            echo "<a href='?page=$total_pages&per_page=$per_page&search=$search_ip&list_filter=$list_filter'>$total_pages</a>";
+            echo "<a href='?page=$total_pages&per_page=$per_page&search=$search_ip&list_filter=$list_filter' class='page-link'>$total_pages</a>";
         }
         
         if ($page < $total_pages) {
-            echo "<a href='?page=" . ($page + 1) . "&per_page=$per_page&search=$search_ip&list_filter=$list_filter'>Sonraki</a>";
+            echo "<a href='?page=" . ($page + 1) . "&per_page=$per_page&search=$search_ip&list_filter=$list_filter' class='page-link'>Sonraki &raquo;</a>";
         }
         echo "</div>";
     }
@@ -444,7 +505,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['ip_address'])) {
                         continue;
                     } else {
                         if (!file_exists($file_path)) {
-                            // Dosya yoksa oluştur
+                            // Dosya yoksa dizinleri oluştur
+                            $dir = dirname($file_path);
+                            if (!is_dir($dir)) {
+                                mkdir($dir, 0755, true);
+                            }
                             file_put_contents($file_path, '');
                         }
                         $file_content = file($file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
@@ -505,17 +570,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['excel_file'])) {
                 $ip .= '/32';
             }
             // Özel IP kontrolü
-			if (is_private_ip(explode('/', $ip)[0])) {
+            if (is_private_ip(explode('/', $ip)[0])) {
                 $error_messages[] = "Özel IP adresi (Private IP) eklenemez: $ip";
                 continue; // Özel IP'yi atla
             }
             // Şirket IP bloklarına ait mi kontrol et
-			if (is_company_ip($ip)) {
+            if (is_company_ip($ip)) {
                 $error_messages[] = "Bu IP, şirket ortamına aittir ve eklenemez: $ip";
                 continue;
             }
             // IP geçerlilik kontrolü
-			if (!validate_ip($ip)) {
+            if (!validate_ip($ip)) {
                 $error_messages[] = "Geçersiz IP adresi veya subnet prefix: $ip";
                 continue; // Geçersizse bir sonraki satıra geç
             } elseif (ip_exists($ip) || subnet_exists($ip)) {
@@ -525,7 +590,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['excel_file'])) {
         }
 
         // FQDN doğrulama
-		if (!empty($fqdn)) {
+        if (!empty($fqdn)) {
             if (!validate_fqdn($fqdn)) {
                 $error_messages[] = "Geçersiz FQDN: $fqdn";
                 continue; // Geçersizse bir sonraki satıra geç
@@ -536,20 +601,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['excel_file'])) {
         }
 
         // IP'yi prefix formatına çevir
-		$ip_prefix = empty($ip) ? 'N/A' : convert_ip_to_prefix($ip);
+        $ip_prefix = empty($ip) ? 'N/A' : convert_ip_to_prefix($ip);
         // Yeni giriş ekleme
-		$date = new DateTime('now', new DateTimeZone($config['timezone']));
+        $date = new DateTime('now', new DateTimeZone($config['timezone']));
         $date_string = $date->format('Y-m-d H:i:s');
 
         // IP varsa kaydet
-		if (!empty($ip)) {
+        if (!empty($ip)) {
             $new_entry = "$ip_prefix|$comment|$date_string|$fqdn|$jira\n";
             file_put_contents($file_path, $new_entry, FILE_APPEND);
-            // output dosyasına yazma
-			write_to_output_blacklist($ip, $fqdn);
+            // Output dosyasına yazma
+            write_to_output_blacklist($ip, $fqdn);
         } elseif (!empty($fqdn)) {
             // FQDN eklerken IP yoksa "N/A" kullan
-			$new_entry = "N/A|$comment|$date_string|$fqdn|$jira\n";
+            $new_entry = "N/A|$comment|$date_string|$fqdn|$jira\n";
             file_put_contents($file_path, $new_entry, FILE_APPEND);
             write_to_output_blacklist('N/A', $fqdn);
         }
@@ -557,7 +622,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['excel_file'])) {
     }
 
     // Bildirim oluştur
-	$messages = [];
+    $messages = [];
     if (!empty($successful_entries)) {
         $messages[] = "Başarıyla eklendi: " . implode(', ', $successful_entries);
     }
@@ -571,21 +636,92 @@ function write_to_output_blacklist($ip, $fqdn) {
     global $config;
     $output_file = $config['file_paths']['output'];
     
-    // Dizin yoksa oluştur
-    $output_dir = dirname($output_file);
-    if (!is_dir($output_dir)) {
-        mkdir($output_dir, 0755, true);
+    // Mevcut içeriği satır satır bir dizi olarak al
+    $existing_content = file_exists($output_file) ? 
+        file($output_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
+    
+    $changes_made = false;
+    
+    // IP'yi ekle (N/A değilse ve zaten mevcut değilse)
+    if (!empty($ip) && $ip !== 'N/A' && !in_array(trim($ip), $existing_content)) {
+        $existing_content[] = trim($ip);
+        $changes_made = true;
     }
     
-    $existing_content = file_exists($output_file) ? file_get_contents($output_file) : '';
-    // Eğer IP varsa, 'N/A' değilse ve zaten mevcut değilse, ekle
-	if (!empty($ip) && $ip !== 'N/A' && strpos($existing_content, trim($ip)) === false) {
-        file_put_contents($output_file, trim($ip) . "\n", FILE_APPEND);
+    // FQDN'i ekle (boş değilse ve zaten mevcut değilse)
+    if (!empty($fqdn) && !in_array(trim($fqdn), $existing_content)) {
+        $existing_content[] = trim($fqdn);
+        $changes_made = true;
     }
-	// Eğer FQDN varsa ve zaten mevcut değilse, ekle
-    if (!empty($fqdn) && strpos($existing_content, trim($fqdn)) === false) {
-        file_put_contents($output_file, trim($fqdn) . "\n", FILE_APPEND);
+    
+    // Değişiklik yapıldıysa dosyayı yeniden yaz
+    if ($changes_made) {
+        // Dizin yoksa oluştur
+        $output_dir = dirname($output_file);
+        if (!is_dir($output_dir)) {
+            mkdir($output_dir, 0755, true);
+        }
+        file_put_contents($output_file, implode("\n", $existing_content) . "\n");
     }
+    
+    return $changes_made;
+}
+
+function sync_manual_blacklist_to_output() {
+    global $file_path, $config;
+    $output_file = $config['file_paths']['output'];
+    
+    // Manuel listeyi oku
+    $manual_items = file_exists($file_path) ? file($file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
+    
+    // Mevcut output içeriğini bir dizi olarak al
+    $existing_content = file_exists($output_file) ? 
+        file($output_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
+    
+    $changes_made = false;
+    
+    // Manuel listedeki her öğeyi işle
+    foreach ($manual_items as $item) {
+        $parts = explode("|", $item);
+        if (count($parts) >= 1) {
+            $ip = trim($parts[0]);
+            $fqdn = isset($parts[3]) ? trim($parts[3]) : '';
+            
+            // IP'yi ekle (N/A değilse ve zaten mevcut değilse)
+            if ($ip && $ip !== 'N/A' && !in_array($ip, $existing_content)) {
+                $existing_content[] = $ip;
+                $changes_made = true;
+            }
+            
+            // FQDN'i ekle (boş değilse ve zaten mevcut değilse)
+            if ($fqdn && !in_array($fqdn, $existing_content)) {
+                $existing_content[] = $fqdn;
+                $changes_made = true;
+            }
+        }
+    }
+    
+    // Değişiklik yapıldıysa dosyayı yeniden yaz
+    if ($changes_made) {
+        // Dizin yoksa oluştur
+        $output_dir = dirname($output_file);
+        if (!is_dir($output_dir)) {
+            mkdir($output_dir, 0755, true);
+        }
+        file_put_contents($output_file, implode("\n", $existing_content) . "\n");
+    }
+    
+    return $changes_made;
+}
+
+if (isset($_POST['sync_blacklist'])) {
+    if (sync_manual_blacklist_to_output()) {
+        $_SESSION['message'] = "Manuel liste başarıyla output dosyası ile senkronize edildi.";
+    } else {
+        $_SESSION['message'] = "Senkronizasyon için değişiklik gerekmedi.";
+    }
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
 }
 
 // Kullanıcıdan arama terimini ve sayfa ayarlarını al
@@ -599,82 +735,154 @@ $per_page_options = $config['pagination']['options'];
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo $config['app']['name']; ?></title>
-    <link rel="stylesheet" href="/www/html/ip-blacklist-management/assets/css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="assets/css/styles.css">
 </head>
+
 <body>
-<header style="background-color: rgba(0, 85, 136, 0.7); color: white; padding: 20px; position: relative;">
-    <img src="assets/images/logo.png" alt="Şirket Logosu" style="position: absolute; top: 20px; right: 20px; height: 50px;">
-    <h1 style="text-align: center; color: white;"><?php echo $config['app']['name']; ?></h1>
-	<!-- Button to redirect to other management system -->
-    <a href="<?php echo $config['app']['other_system_url']; ?>" 
-       style="position: absolute; top: 20px; left: 100px; padding: 10px 20px; background-color:#000000; color: white; border-radius: 5px; text-decoration: none;">
-       <?php echo $config['app']['other_system_name']; ?>
-    </a>
-</header>
+    <header class="header">
+        <div class="header-content">
+            <h1 class="header-title"><?php echo $config['app']['name']; ?></h1>
+            <div class="header-actions">
+                <a href="whitelist.php" class="btn btn-success">
+                    <i class="fas fa-shield-alt"></i> Beyaz Liste Görüntüle
+                </a>
+                <?php if (!empty($config['app']['other_system_url'])): ?>
+                <a href="<?php echo $config['app']['other_system_url']; ?>" class="btn btn-info">
+                    <i class="fas fa-external-link-alt"></i> <?php echo $config['app']['other_system_name']; ?>
+                </a>
+                <?php endif; ?>
+            </div>
+            <img src="assets/images/logo.png" alt="Şirket Logosu" class="logo">
+        </div>
+    </header>
 
-<main>
-    <div class="notification-area">
-        <?php display_message(); ?>
+    <?php if (isset($_SESSION['message']) && !empty($_SESSION['message'])): ?>
+    <div class="container">
+        <div class="alert">
+            <?php echo $_SESSION['message']; ?>
+            <button type="button" class="close" onclick="this.parentElement.style.display='none'">&times;</button>
+        </div>
     </div>
-    <section>
-        <div class="form-group" style="background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); margin-bottom: 20px;">
-            <h2>Manuel Ekleme</h2>
-            <p>Bir veya daha fazla IP adresi girin (örn: 192.168.1.1/24, 255.255.255.0). Virgülle ayırmayı unutmayın.</p>
-            <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
-                <label for="ip_address">IP Adresi:</label>
-                <input type="text" name="ip_address" id="ip_address" placeholder="IP Adresi">
-                <label for="comment">Yorum:</label>
-                <input type="text" name="comment" id="comment" placeholder="Yorum">
-                <label for="fqdn">FQDN:</label>
-				<input type="text" name="fqdn" id="fqdn" placeholder="FQDN">
-                <label for="jira">Jira Numarası/URL:</label>
-                <input type="text" name="jira" id="jira" placeholder="Jira Numarası/URL">
-                <input type="submit" value="Ekle">
-            </form>
-        </div>
+    <?php unset($_SESSION['message']); endif; ?>
 
-        <div class="upload-section">
-            <h3>Excel ile Toplu Ekleme</h3>
-            <a href="download_excel.php" class="button">Excel Taslağını İndir</a>
-            <p>Excel taslağını indirin, düzenleyin ve buraya yükleyin.</p>
-            <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" enctype="multipart/form-data">
-                <input type="file" name="excel_file" required>
-                <input type="submit" value="Yükle">
-            </form>
-        </div>
+    <div class="container">
+        <!-- Sol taraf - Kara Liste Tablosu -->
+        <main class="main-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <i class="fas fa-ban"></i> Kara Liste (Blacklist) 
+                        <span class="list-info" id="current-list-info">
+                            <?php echo ($list_filter === 'all' ? 'Tüm Listeler' : $list_filter); ?>
+                        </span>
+                    </h2>
+                    
+                    <!-- Senkronizasyon butonu -->
+                    <form method="post" action="" class="ml-auto">
+                        <button type="submit" name="sync_blacklist" class="btn btn-primary btn-sm">
+                            <i class="fas fa-sync"></i> Manuel Listeyi Senkronize Et
+                        </button>
+                    </form>
+                </div>
+                <div class="card-body">
+                    <?php display_blacklist($search_ip, $per_page, $page, $list_filter); ?>
+                </div>
+            </div>
+        </main>
 
-        <div class="search-section">
-            <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>">
-                <label for="search">IP Adresi Ara:</label>
-                <input type="text" name="search" id="search" placeholder="IP Adresi" value="<?php echo htmlspecialchars($search_ip); ?>">
-                <input type="submit" value="Ara">
-            </form>
-        </div>
+        <!-- Sağ taraf - Ekleme Formları -->
+        <aside class="sidebar">
+            <!-- Manuel Ekleme Formu -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-plus-circle"></i> Manuel Ekleme</h3>
+                </div>
+                <div class="card-body">
+                    <p class="mb-3">Bir veya daha fazla IP adresi girin (örn: 192.168.1.1/24). Birden fazla giriş için virgül kullanın.</p>
+                    <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
+                        <div class="form-group">
+                            <label for="ip_address">IP Adresi:</label>
+                            <input type="text" name="ip_address" id="ip_address" class="form-control" placeholder="IP Adresi">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="comment">Yorum:</label>
+                            <input type="text" name="comment" id="comment" class="form-control" placeholder="Yorum">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="fqdn">FQDN:</label>
+                            <input type="text" name="fqdn" id="fqdn" class="form-control" placeholder="FQDN">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="jira">Jira Numarası/URL:</label>
+                            <input type="text" name="jira" id="jira" class="form-control" placeholder="Jira Numarası/URL">
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Ekle
+                        </button>
+                    </form>
+                </div>
+            </div>
 
-        <div class="per-page-selection">
-            <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>">
-                <label for="per_page">Sayfa Başına:</label>
-                <select name="per_page" id="per_page" onchange="this.form.submit()">
-                    <?php foreach ($per_page_options as $option): ?>
-                        <option value="<?php echo $option; ?>" <?php if ($option == $per_page) echo 'selected'; ?>>
-                            <?php echo $option; ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <input type="hidden" name="search" value="<?php echo htmlspecialchars($search_ip); ?>">
-            </form>
-        </div>
+            <!-- Excel ile Toplu Ekleme -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-file-excel"></i> Excel ile Toplu Ekleme</h3>
+                </div>
+                <div class="card-body">
+                    <p class="mb-3">Excel taslağını indirin, düzenleyin ve buraya yükleyin.</p>
+                    <a href="download_excel.php" class="btn btn-success mb-3">
+                        <i class="fas fa-download"></i> Excel Taslağını İndir
+                    </a>
+                    
+                    <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <div class="file-upload">
+                                <label for="excel_file" class="file-upload-label">
+                                    <i class="fas fa-upload"></i> Dosya Seç
+                                </label>
+                                <input type="file" name="excel_file" id="excel_file" required onchange="updateFileName(this)">
+                                <span id="file-name" class="file-name">Dosya seçilmedi</span>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary mt-2">
+                            <i class="fas fa-cloud-upload-alt"></i> Yükle
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </aside>
+    </div>
 
-        <div class="blacklist-table">
-            <?php display_blacklist($search_ip, $per_page, $page, $list_filter); ?>
-        </div>
-    </section>
-</main>
+    <footer class="footer">
+        <p>&copy; <?php echo date('Y'); ?> <?php echo $config['app']['company']; ?>. Tüm hakları saklıdır.</p>
+    </footer>
 
-<footer>
-    <p>&copy; <?php echo date('Y'); ?> <?php echo $config['app']['company']; ?>. Tüm hakları saklıdır.</p>
-</footer>
+    <script>
+        // Tüm onay kutularını seçme/kaldırma
+        function toggleAllCheckboxes() {
+            var checkboxes = document.getElementsByClassName('record-checkbox');
+            var selectAllCheckbox = document.getElementById('select-all');
+            
+            for (var i = 0; i < checkboxes.length; i++) {
+                checkboxes[i].checked = selectAllCheckbox.checked;
+            }
+        }
+        
+        // Dosya adını gösterme
+        function updateFileName(input) {
+            var fileName = input.files[0] ? input.files[0].name : 'Dosya seçilmedi';
+            document.getElementById('file-name').textContent = fileName;
+        }
+    </script>
 </body>
 </html>
