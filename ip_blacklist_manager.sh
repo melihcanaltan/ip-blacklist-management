@@ -6,7 +6,7 @@
 # Bu script çeşitli güvenlik listelerini indirir, filtreler,
 # birleştirir ve whitelist ile çakışmaları kontrol eder.
 #
-# Versiyon: 2.0
+# Versiyon: 2.1 (Fixed for local directory usage)
 # Geliştirici: Generic Security Tools
 # Güncelleme: 2024
 #################################################################
@@ -24,11 +24,12 @@
 #################################################################
 
 # =============================================================
-# DOSYA YOLLARİ VE DİZİN AYARLARI
+# DOSYA YOLLARI VE DİZİN AYARLARI
 # =============================================================
-# Bu dizin tüm çıktı dosyalarını içerecek
-# Değiştirmek için: Kendi dizin yapınızı yazın
-BASE_DIR="/opt/blacklist"
+# Script'in bulunduğu dizini otomatik tespit et
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Data dizinini script'in yanında oluştur
+BASE_DIR="$SCRIPT_DIR/data"
 
 # Bireysel blacklist dosyaları - Her kaynak için ayrı dosya
 CINSSCORE_FILE="$BASE_DIR/ci-badguys.txt"          # CINSScore kötü IP'ler
@@ -38,7 +39,7 @@ WHITELIST_FILE="$BASE_DIR/whitelist.txt"           # Beyaz liste (güvenli IP'le
 
 # Sistem dosyaları
 CONFLICT_LOG="$BASE_DIR/conflict_log.txt"          # Çakışma raporları
-COMBINED_FILE="$BASE_DIR/combined_blacklist.txt"   # ⭐ ANA ÇIKTI: Tüm listelerin birleşimi
+COMBINED_FILE="$BASE_DIR/output/combined_blacklist.txt"   # ⭐ ANA ÇIKTI: Tüm listelerin birleşimi
 LOG_FILE="$BASE_DIR/ip_blocklist.log"              # İşlem logları
 
 # Geçici dosyalar - Script çalışırken kullanılır
@@ -68,7 +69,7 @@ FIREHOL_URL="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/f
 # Kendi listeleriniz - Boş bırakılan listeler atlanır
 THREATSTOP_URL=""                                   # Kendi internal URL'nizi ekleyin
 
-# 📝 YENİ LİSTE EKLEMEK İÇİN ÖRNEK:
+# 📋 YENİ LİSTE EKLEMEK İÇİN ÖRNEK:
 # SPAMHAUS_URL="https://www.spamhaus.org/drop/drop.txt"
 # EMERGING_THREATS_URL="https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
 
@@ -130,6 +131,8 @@ trap cleanup ERR INT TERM
 
 # Zaman damgalı log mesajı yazar
 log_message() {
+    # Log dizinini oluştur (eğer yoksa)
+    mkdir -p "$(dirname "$LOG_FILE")"
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
     echo "$1"  # Aynı zamanda ekrana da yaz
 }
@@ -150,7 +153,7 @@ error_exit() {
 # - Özel ağ aralıkları (RFC 1918)
 # - Geçersiz IP'ler
 # 
-# 🔧 FİLTRE KURALLARI EKLEMECi/ÇIKARMAK:
+# 🔧 FİLTRE KURALLARI EKLEME/ÇIKARMA:
 # grep -v "^pattern" satırları ekleyin/çıkarın
 # =============================================================
 
@@ -166,20 +169,20 @@ filter_ips() {
     
     log_message "Filtering IPs from $(basename $input_file)..."
     
-    # IP filtreleme kuralları
+    # IP filtreleme kuralları - düzeltilmiş versiyon
     cat "$input_file" | \
-    grep -v "^#" | \                                    # Yorum satırlarını çıkar
-    grep -v "^$" | \                                    # Boş satırları çıkar
-    grep -v "^10\." | \                                 # 10.0.0.0/8 (Özel ağ)
-    grep -v "^172\.\(1[6-9]\|2[0-9]\|3[0-1]\)\." | \   # 172.16.0.0/12 (Özel ağ)
-    grep -v "^192\.168\." | \                           # 192.168.0.0/16 (Özel ağ)
-    grep -v "^0\." | \                                  # 0.x.x.x (Geçersiz)
-    grep -v "0\.0\.0\.0" | \                            # 0.0.0.0 (Geçersiz)
-    grep -v "^127\." | \                                # 127.x.x.x (Loopback)
-    grep -v "^169\.254\." | \                           # 169.254.x.x (Link-local)
-    grep -v "^224\." | \                                # 224.x.x.x (Multicast)
-    grep -v "^240\." | \                                # 240.x.x.x (Rezerve)
-    grep -v "^255\." > "$output_file"                   # 255.x.x.x (Broadcast)
+        grep -v "^#" | \
+        grep -v "^$" | \
+        grep -v "^10\." | \
+        grep -v "^172\.\(1[6-9]\|2[0-9]\|3[0-1]\)\." | \
+        grep -v "^192\.168\." | \
+        grep -v "^0\." | \
+        grep -v "0\.0\.0\.0" | \
+        grep -v "^127\." | \
+        grep -v "^169\.254\." | \
+        grep -v "^224\." | \
+        grep -v "^240\." | \
+        grep -v "^255\." > "$output_file"
     
     # 🔧 YENİ FİLTRE KURALI EKLEMEK İÇİN:
     # grep -v "^YOUR_PATTERN" | \ satırını ekleyin
@@ -447,28 +450,6 @@ log_statistics() {
     fi
 }
 
-# =============================================================
-# YENİ LİSTE EKLEMEK İÇİN ŞABLON FONKSİYONU
-# 
-# 🔧 YENİ GÜVENLİK LİSTESİ EKLEMEK İÇİN:
-# 1. Bu fonksiyonu kopyalayın
-# 2. Değişken isimlerini değiştirin
-# 3. Ana programda çağrı ekleyin
-# =============================================================
-
-# ÖRNEK: Yeni liste ekleme şablonu
-# download_and_process_new_list() {
-#     local NEW_LIST_URL="https://example.com/threat-list.txt"
-#     local NEW_LIST_FILE="$BASE_DIR/new_threats.txt"
-#     local NEW_LIST_TEMP="$TEMP_DIR/new_threats.temp"
-#     
-#     download_file "$NEW_LIST_URL" "$NEW_LIST_TEMP" "New Threat List"
-#     filter_ips "$NEW_LIST_TEMP" "$NEW_LIST_FILE"
-#     
-#     # Birleştirme işleminde bu dosyayı da ekleyin:
-#     # cat "$CINSSCORE_FILE" "$FIREHOL_FILE" "$THREATSTOP_FILE" "$NEW_LIST_FILE" | sort -u > "$COMBINED_FILE"
-# }
-
 #################################################################
 # ANA PROGRAM
 # 
@@ -485,7 +466,7 @@ log_statistics() {
 
 main() {
     echo ""
-    echo "🚀 IP BLACKLIST MANAGEMENT SYSTEM v2.0"
+    echo "🚀 IP BLACKLIST MANAGEMENT SYSTEM v2.1"
     echo "========================================"
     echo ""
     
@@ -503,7 +484,7 @@ main() {
     
     # Gerekli dizinleri oluştur
     log_message "Creating directories..."
-    mkdir -p "$BASE_DIR" "$TEMP_DIR" || error_exit "Failed to create directories"
+    mkdir -p "$BASE_DIR" "$TEMP_DIR" "$(dirname "$COMBINED_FILE")" || error_exit "Failed to create directories"
     
     # İzinleri kontrol et
     if [ ! -w "$BASE_DIR" ]; then
@@ -574,7 +555,7 @@ main() {
     echo ""
     
     # =============================================================
-    # 5. ÇAKIŞMA KONTROLü
+    # 5. ÇAKIŞMA KONTROLÜ
     # =============================================================
     
     echo "⚠️  Checking for whitelist conflicts..."
@@ -607,9 +588,10 @@ main() {
     fi
     
     echo ""
-    echo "🎉 IP Blacklist Management System completed successfully!"
+    echo "🌟 IP Blacklist Management System completed successfully!"
     echo "   Check logs: $LOG_FILE"
     echo "   Main output: $COMBINED_FILE"
+    echo "   Data directory: $BASE_DIR"
     echo ""
     
     log_message "=== IP Blacklist Management System Completed Successfully ==="
@@ -630,7 +612,7 @@ exit 0
 #################################################################
 # SCRIPT SONU
 # 
-# 📝 KULLANIM ÖRNEKLERİ:
+# 📋 KULLANIM ÖRNEKLERİ:
 # 
 # Manuel çalıştırma:
 #   ./ip_blacklist_manager.sh
@@ -659,7 +641,7 @@ exit 0
 #    - Public key kopyala: ssh-copy-id user@server
 #    - WHITELIST_* değişkenlerini doldur
 # 
-# 4. FİLTRE KURALLARI EKLEMECi:
+# 4. FİLTRE KURALLARI EKLEMEK:
 #    - filter_ips fonksiyonuna grep -v satırı ekle
 #    - Yeni IP aralığı bloklamak için pattern ekle
 # 
@@ -673,5 +655,11 @@ exit 0
 # - Log dosyalarını düzenli kontrol edin
 # - Güvenlik listelerini güncel tutun
 # - Backup stratejinizi planlayın
+#
+# 🔐 GÜVENLİK NOTLARI:
+# - Script'i düzenli olarak cron job ile çalıştırın
+# - Log dosyalarını monitör edin
+# - Çakışma raporlarını inceleyin
+# - Whitelist'i düzenli güncelleyin
 #
 #################################################################
